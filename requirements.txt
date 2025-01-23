@@ -1,0 +1,8 @@
+streamlit
+langchain
+langchain-cohere
+cohere
+python-dotenv
+sqlalchemy
+requests
+langsmith 
