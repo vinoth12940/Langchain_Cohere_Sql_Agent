@@ -1,5 +1,6 @@
 import streamlit as st
 import os
+import re
 from langchain.agents import AgentExecutor
 from langchain_cohere.react_multi_hop.agent import create_cohere_react_agent
 from langchain_core.prompts import ChatPromptTemplate
@@ -17,6 +18,7 @@ load_dotenv()
 # Initialize LangSmith client if needed
 os.environ["LANGCHAIN_TRACING_V2"] = "true"
 os.environ["LANGCHAIN_PROJECT"] = "postgres-sql-agent"
+os.environ["LANGSMITH_API_KEY"] = os.getenv("LANGSMITH_API_KEY")
 
 # Function to connect to PostgreSQL database
 def get_postgresql_engine():
@@ -52,6 +54,34 @@ def get_postgresql_engine():
     except Exception as e:
         st.error(f"❌ Database connection error: {str(e)}")
         raise
+
+# Function to fix table formatting in markdown text
+def fix_table_formatting(text):
+    """Ensures tables in markdown are properly formatted with newlines before and after."""
+    # Look for table patterns (lines starting with | and containing |)
+    lines = text.split('\n')
+    fixed_lines = []
+    in_table = False
+    
+    for i, line in enumerate(lines):
+        # Detect start of a table (line with | character)
+        if not in_table and line.strip().startswith('|') and '|' in line[1:]:
+            # If previous line isn't empty, add blank line
+            if i > 0 and lines[i-1].strip() != '':
+                fixed_lines.append('')
+            in_table = True
+            fixed_lines.append(line)
+        # Detect end of a table
+        elif in_table and (not line.strip().startswith('|') or not '|' in line[1:]):
+            # If next line isn't empty, add blank line
+            if line.strip() != '':
+                fixed_lines.append('')
+            in_table = False
+            fixed_lines.append(line)
+        else:
+            fixed_lines.append(line)
+    
+    return '\n'.join(fixed_lines)
 
 # Initialize session state
 if "messages" not in st.session_state:
@@ -89,6 +119,7 @@ training sessions, payments, attendance, and more.
 
 ## Style Guide
 Unless the user asks for a different style of answer, you should answer in full sentences, using proper grammar and spelling.
+When displaying tables in markdown format, always add a blank line before and after the table for proper rendering.
 
 ## Additional Information
 You are an expert who answers the user's question by creating SQL queries and executing them.
@@ -155,7 +186,11 @@ if prompt := st.chat_input("Ask a question about the cricket academy database"):
                     "table_info": st.session_state.context
                 })
                 response_content = response["output"]
-                st.markdown(response_content)
+                
+                # Fix table formatting in the response
+                fixed_response = fix_table_formatting(response_content)
+                
+                st.markdown(fixed_response)
                 
                 # Show intermediate steps in an expander
                 with st.expander("See agent's thought process"):
@@ -166,7 +201,7 @@ if prompt := st.chat_input("Ask a question about the cricket academy database"):
                         st.write("---")
                 
                 # Add assistant response to chat history
-                st.session_state.messages.append({"role": "assistant", "content": response_content})
+                st.session_state.messages.append({"role": "assistant", "content": fixed_response})
             except Exception as e:
                 error_message = f"Error: {str(e)}"
                 st.error(error_message)
