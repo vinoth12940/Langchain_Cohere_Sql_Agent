@@ -5,4 +5,5 @@ cohere
 python-dotenv
 sqlalchemy
 requests
-langsmith 
+langsmith
+psycopg2-binary 
