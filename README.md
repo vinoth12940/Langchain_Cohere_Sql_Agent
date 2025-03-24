@@ -1,375 +1,87 @@
-# SQL Agent Chat Interface Documentation
+# Cricket Academy SQL Agent
 
-## Overview
+This application provides a chat interface to query a PostgreSQL cricket academy database using natural language. The application uses large language models to translate natural language queries into SQL and present the results in a readable format.
 
-The SQL Agent Chat Interface is a sophisticated application that combines natural language processing with database querying capabilities. It allows users to interact with a SQL database using natural language, powered by the Cohere language model and implemented through LangChain's agent system.
+## Features
 
-## Required Libraries
+- Natural language to SQL conversion
+- Read-only database access (prevents modification queries)
+- Interactive chat interface with Streamlit
+- Support for multiple LLM providers (Cohere and Google Gemini)
+- Query history and thought process visibility
+- Database schema visibility in the sidebar
 
-### Core Dependencies
-```txt
-# requirements.txt
-langchain
-langchain_cohere
-langchain_experimental
-streamlit
-```
+## Prerequisites
 
-### Library Descriptions
+- Python 3.8 or higher
+- PostgreSQL database (with cricket_academy schema)
+- API keys for Cohere and/or Google Gemini
 
-1. **LangChain**
-   - Purpose: Core framework for building LLM applications
-   - Installation: `pip install langchain`
-   - Documentation: [LangChain Docs](https://python.langchain.com)
-   - Features: Agent system, chains, prompts, SQL database toolkit
+## Installation
 
-2. **LangChain Cohere**
-   - Purpose: Cohere integration for LangChain
-   - Installation: `pip install langchain_cohere`
-   - Features: Cohere LLM integration, chat models
-
-3. **LangChain Experimental**
-   - Purpose: Experimental features and tools
-   - Installation: `pip install langchain_experimental`
-   - Features: Advanced agents, experimental tools
-
-4. **Streamlit**
-   - Purpose: Web application framework for the user interface
-   - Installation: `pip install streamlit`
-   - Documentation: [Streamlit Docs](https://docs.streamlit.io)
-   - Features: Interactive UI, session state management, chat interface
-
-### Installation Instructions
-
-1. **Quick Installation**:
+1. Clone this repository:
 ```bash
-pip install langchain langchain_cohere langchain_experimental streamlit --upgrade
+git clone https://github.com/yourusername/cricket-academy-sql-agent.git
+cd cricket-academy-sql-agent
 ```
 
-### Additional Requirements
-
-1. **API Keys**:
-```env
-COHERE_API_KEY=your_cohere_api_key_here
-```
-
-2. **Database**:
-- Chinook SQLite database (automatically downloaded and initialized)
-- Internet connection for initial database setup
-
-## System Architecture
-
-```
-┌─────────────────┐     ┌──────────────┐     ┌────────────────┐
-│  Streamlit UI   │────▶│  LangChain   │────▶│  Cohere LLM    │
-└─────────────────┘     └──────────────┘     └────────────────┘
-        │                      │                      │
-        │                      │                      │
-        ▼                      ▼                      ▼
-┌─────────────────┐     ┌──────────────┐     ┌────────────────┐
-│  Session State  │◀───▶│    Agent     │◀───▶│  SQL Database  │
-└─────────────────┘     └──────────────┘     └────────────────┘
-```
-
-## Workflow Steps
-
-### 1. Environment Setup
-
-```python
-# Load environment variables
-load_dotenv()
-```
-
-- Configure environment variables
-- Set up API keys and configurations
-- Initialize logging and debugging settings
-
-### 2. Database Initialization
-
-```python
-def get_engine_for_chinook_db():
-    """Initialize SQLite database with Chinook dataset."""
-    url = "https://raw.githubusercontent.com/lerocha/chinook-database/master/ChinookDatabase/DataSources/Chinook_Sqlite.sql"
-    response = requests.get(url)
-    sql_script = response.text
-    connection = sqlite3.connect(":memory:", check_same_thread=False)
-    connection.executescript(sql_script)
-    return create_engine(
-        "sqlite://",
-        creator=lambda: connection,
-        poolclass=StaticPool,
-        connect_args={"check_same_thread": False},
-    )
-```
-
-### 3. Session State Management
-
-```python
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-
-if "agent_executor" not in st.session_state:
-    engine = get_engine_for_chinook_db()
-    db = SQLDatabase(engine)
-```
-
-### 4. Agent and Toolkit Setup
-
-```python
-MODEL = "command-r-plus"
-llm = ChatCohere(
-    model=MODEL, 
-    temperature=0.1,
-    verbose=True,
-    cohere_api_key=os.getenv("COHERE_API_KEY")
-)
-toolkit = SQLDatabaseToolkit(db=db, llm=llm)
-context = toolkit.get_context()
-tools = toolkit.get_tools()
-```
-
-### 5. Preamble Configuration
-
-```python
-preamble = f"""## Task And Context
-You use your advanced complex reasoning capabilities to help people by answering their questions and other requests interactively. You will be asked a very wide array of requests on all kinds of topics. You will be equipped with a wide range of search engines or similar tools to help you, which you use to research your answer. You may need to use multiple tools in parallel or sequentially to complete your task. You should focus on serving the user's needs as best you can, which will be wide-ranging.
-
-## Style Guide
-Unless the user asks for a different style of answer, you should answer in full sentences, using proper grammar and spelling.
-
-## Additional Information
-You are an expert who answers the user's question by creating SQL queries and executing them.
-You are equipped with a number of relevant SQL tools.
-
-Here is information about the database:
-{st.session_state.table_info}
-
-Question: {{input}}"""
-```
-
-### 6. Agent Creation and Configuration
-
-```python
-prompt = ChatPromptTemplate.from_template(preamble)
-agent = create_cohere_react_agent(
-    llm=llm,
-    tools=tools,
-    prompt=prompt,
-)
-st.session_state.agent_executor = AgentExecutor(
-    agent=agent,
-    tools=tools,
-    verbose=True,
-    return_intermediate_steps=True
-)
-```
-
-## Database Schema and Tools
-
-### Available Tables
-
-- Album
-- Artist
-- Customer
-- Employee
-- Genre
-- Invoice
-- InvoiceLine
-- MediaType
-- Playlist
-- PlaylistTrack
-- Track
-
-### SQL Tools Available
-
-1. `sql_db_query`: Execute SQL queries
-2. `sql_db_schema`: Get database schema information
-3. `sql_db_list_tables`: List available tables
-4. `sql_db_query_checker`: Validate SQL queries
-
-## User Interaction Flow
-
-1. **User Input Processing**
-
-```python
-if prompt := st.chat_input("Ask a question about the database"):
-    st.session_state.messages.append({"role": "user", "content": prompt})
-```
-
-2. **Agent Execution**
-
-```python
-response = st.session_state.agent_executor.invoke({
-    "input": prompt,
-    "table_info": st.session_state.context
-})
-```
-
-3. **Response Handling**
-
-```python
-response_content = response["output"]
-st.markdown(response_content)
-```
-
-4. **Intermediate Steps Display**
-
-```python
-with st.expander("See agent's thought process"):
-    for step in response["intermediate_steps"]:
-        st.write(f"Tool: {step[0].tool}")
-        st.write(f"Input: {step[0].tool_input}")
-        st.write(f"Output: {step[1]}")
-```
-
-## Error Handling and Edge Cases
-
-### 1. Database Connection Errors
-
-```python
-try:
-    engine = get_engine_for_chinook_db()
-except Exception as e:
-    st.error(f"Database initialization failed: {str(e)}")
-    st.stop()
-```
-
-### 2. API Errors
-
-```python
-try:
-    response = st.session_state.agent_executor.invoke(...)
-except Exception as e:
-    st.error(f"Query processing failed: {str(e)}")
-```
-
-### 3. Input Validation
-
-- Check for empty queries
-- Validate input length
-- Sanitize user input
-
-## Performance Optimization
-
-1. **Memory Management**
-
-- Use in-memory SQLite database
-- Implement session state cleanup
-- Monitor memory usage
-
-2. **Query Optimization**
-
-- Implement query timeout
-- Use connection pooling
-- Cache frequent queries
-
-3. **UI Responsiveness**
-
-- Implement loading states
-- Use streaming responses
-- Optimize UI updates
-
-## Security Considerations
-
-1. **API Security**
-
-- Secure API key storage
-- Implement rate limiting
-- Monitor API usage
-
-2. **Database Security**
-
-- Prevent SQL injection
-- Implement query sanitization
-- Restrict database access
-
-3. **User Input Security**
-
-- Validate all user inputs
-- Sanitize query parameters
-- Implement request throttling
-
-## Testing Strategy
-
-### Unit Tests
-
-```python
-def test_database_connection():
-    engine = get_engine_for_chinook_db()
-    assert engine is not None
-
-def test_agent_response():
-    response = agent_executor.invoke({"input": "list all tables"})
-    assert response is not None
-```
-
-### Integration Tests
-
-- End-to-end query testing
-- API integration verification
-- UI component testing
-
-## Deployment Guide
-
-1. **Environment Setup**
-
+2. Create and activate a virtual environment:
 ```bash
 python -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
+```
+
+3. Install the required packages:
+```bash
 pip install -r requirements.txt
-use noteenv conda env
 ```
 
-2. **Configuration**
-
-```env
-COHERE_API_KEY=your_api_key_here
+4. Create a `.env` file in the root directory with your API keys:
+```
+COHERE_API_KEY=your_cohere_api_key
+GOOGLE_API_KEY=your_google_api_key
+LANGSMITH_API_KEY=your_langsmith_api_key
 ```
 
-3. **Running the Application**
+5. Make sure you have a PostgreSQL database named `cricket_academy` running with user `postgres` and password `postgres`. Update the connection string in the code if your configuration is different.
+
+## Usage
+
+### Cohere SQL Agent
+
+Run the Cohere version of the SQL agent:
 
 ```bash
-streamlit run sql_agent_app.py
+streamlit run postgres_sql_agent.py
 ```
 
-## Maintenance and Monitoring
+### Gemini SQL Agent
 
-1. **Logging**
+Run the Google Gemini version of the SQL agent:
 
-- API call logging
-- Error tracking
-- Performance monitoring
+```bash
+streamlit run gemini_sql_agent.py
+```
 
-2. **Updates**
+### Interacting with the Application
 
-- Regular dependency updates
-- Security patches
-- Feature enhancements
+1. Once the application is running, you'll see a chat interface.
+2. Type your questions about the cricket academy database in natural language.
+3. The agent will convert your question into SQL, execute it, and return the results.
+4. You can view the database schema and available tables in the sidebar.
+5. Expand the "See agent's thought process" section to view the step-by-step reasoning.
 
-3. **Backup and Recovery**
+## Example Queries
 
-- Session state backup
-- Error recovery procedures
-- Database backup strategies
+- "How many players are registered in the academy?"
+- "List all coaches and their specializations."
+- "What is the average attendance rate for training sessions in the last month?"
+- "Show me the top 5 players with the highest batting average."
 
-## Troubleshooting Guide
+## Security Note
 
-1. **Common Issues**
+This application operates in READ-ONLY mode by design. The database connection is configured to reject any modification queries (INSERT, UPDATE, DELETE, ALTER, DROP, TRUNCATE) as a security measure.
 
-- API key configuration
-- Database connection
-- Query timeout
+## License
 
-2. **Solutions**
-
-- Verify environment variables
-- Check database status
-- Monitor query performance
-
-3. **Support**
-
-- Issue reporting
-- Documentation updates
-- Community support
-
-This comprehensive documentation provides a complete guide to understanding, implementing, and maintaining the SQL Agent Chat Interface.
+MIT
