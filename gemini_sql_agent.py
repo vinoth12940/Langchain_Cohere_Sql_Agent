@@ -177,7 +177,7 @@ Question: {input}
         st.error(f"Error initializing the agent: {str(e)}")
 
 # Streamlit UI
-st.title("Cricket Academy SQL Agent (Gemini 1.5 Pro) - Read-Only")
+st.title("Cricket Academy SQL Agent (Gemini 2.0 Flash) - Read-Only")
 st.caption("This application operates in read-only mode and only allows SELECT queries.")
 
 # Add a sidebar with database information
