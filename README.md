@@ -1,87 +1,88 @@
-# Cricket Academy SQL Agent
+# SQL Query Assistant
 
-This application provides a chat interface to query a PostgreSQL cricket academy database using natural language. The application uses large language models to translate natural language queries into SQL and present the results in a readable format.
+A natural language interface for PostgreSQL databases powered by AWS Bedrock and Claude 3.5 Sonnet. Ask questions about your database in plain English and get results instantly.
 
 ## Features
 
-- Natural language to SQL conversion
-- Read-only database access (prevents modification queries)
-- Interactive chat interface with Streamlit
-- Support for multiple LLM providers (Cohere and Google Gemini)
-- Query history and thought process visibility
-- Database schema visibility in the sidebar
+- Natural language queries to PostgreSQL databases
+- Secure authentication with AWS Bedrock
+- Interactive Streamlit web interface
+- Chat-based interaction with query history
+- Predefined sample queries
+- Input validation to prevent harmful SQL commands
 
-## Prerequisites
+## Requirements
 
-- Python 3.8 or higher
-- PostgreSQL database (with cricket_academy schema)
-- API keys for Cohere and/or Google Gemini
-
-## Installation
-
-1. Clone this repository:
-```bash
-git clone https://github.com/yourusername/cricket-academy-sql-agent.git
-cd cricket-academy-sql-agent
+### Python Libraries
+```
+streamlit>=1.31.0
+langchain>=0.1.0
+langchain-aws>=0.0.2
+langchain-community>=0.0.13
+sqlalchemy>=2.0.0
+psycopg2-binary>=2.9.0
+python-dotenv>=1.0.0
 ```
 
-2. Create and activate a virtual environment:
-```bash
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-```
+### External Services
+- AWS Bedrock (with Claude 3.5 Sonnet access)
+- PostgreSQL database
 
-3. Install the required packages:
-```bash
-pip install -r requirements.txt
-```
+## Setup
 
-4. Create a `.env` file in the root directory with your API keys:
-```
-COHERE_API_KEY=your_cohere_api_key
-GOOGLE_API_KEY=your_google_api_key
-LANGSMITH_API_KEY=your_langsmith_api_key
-```
+1. Clone the repository:
+   ```
+   git clone [repository-url]
+   cd [repository-directory]
+   ```
 
-5. Make sure you have a PostgreSQL database named `cricket_academy` running with user `postgres` and password `postgres`. Update the connection string in the code if your configuration is different.
+2. Install required packages:
+   ```
+   pip install -r requirements.txt
+   ```
+
+3. Set up your environment variables by copying the example file:
+   ```
+   cp .env.example .env
+   ```
+
+4. Edit the `.env` file with your credentials:
+   - `COHERE_API_KEY`: Your Cohere API key
+   - `LANGSMITH_API_KEY`: Your LangSmith API key
+   - `GOOGLE_API_KEY`: Your Google API key
+   - `AWS_ACCESS_KEY_ID`: Your AWS access key
+   - `AWS_SECRET_ACCESS_KEY`: Your AWS secret key
+   - `AWS_REGION`: AWS region (default: us-east-2)
+   - `AWS_BEDROCK_MODEL_ID`: AWS Bedrock model ID
+   - Database credentials:
+     - `DB_USER`: Database username
+     - `DB_PASSWORD`: Database password
+     - `DB_HOST`: Database host
+     - `DB_PORT`: Database port
+     - `DB_NAME`: Database name
 
 ## Usage
 
-### Cohere SQL Agent
+1. Run the application:
+   ```
+   streamlit run awsclaude_sql_agent.py
+   ```
 
-Run the Cohere version of the SQL agent:
+2. Open your browser and navigate to the URL shown in the terminal (typically http://localhost:8501)
 
-```bash
-streamlit run postgres_sql_agent.py
-```
+3. Ask natural language questions about your database in the chat interface
 
-### Gemini SQL Agent
+4. Use the sample queries in the sidebar to get started
 
-Run the Google Gemini version of the SQL agent:
+## Security Notes
 
-```bash
-streamlit run gemini_sql_agent.py
-```
+- The application includes input validation to block potentially harmful SQL commands
+- API keys and database credentials are stored in the `.env` file, which should never be committed to version control
+- Always follow the principle of least privilege when setting up AWS credentials
 
-### Interacting with the Application
+## Logging
 
-1. Once the application is running, you'll see a chat interface.
-2. Type your questions about the cricket academy database in natural language.
-3. The agent will convert your question into SQL, execute it, and return the results.
-4. You can view the database schema and available tables in the sidebar.
-5. Expand the "See agent's thought process" section to view the step-by-step reasoning.
-
-## Example Queries
-
-- "How many players are registered in the academy?"
-- "List all coaches and their specializations."
-- "What is the average attendance rate for training sessions in the last month?"
-- "Show me the top 5 players with the highest batting average."
-
-## Security Note
-
-This application operates in READ-ONLY mode by design. The database connection is configured to reject any modification queries (INSERT, UPDATE, DELETE, ALTER, DROP, TRUNCATE) as a security measure.
-
-## License
-
-MIT
+Application logs are stored in `app.log` and include:
+- Database connection attempts
+- Query executions
+- Errors and warnings

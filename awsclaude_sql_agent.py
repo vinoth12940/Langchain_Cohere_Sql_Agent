@@ -1,244 +1,216 @@
 import streamlit as st
-import os
-import re
-from langchain.agents import AgentExecutor
-from langchain_aws import ChatBedrockConverse
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
-from langchain_community.utilities.sql_database import SQLDatabase
+from langchain_aws import ChatBedrock
+from langchain_community.utilities import SQLDatabase
 from langchain_community.agent_toolkits import SQLDatabaseToolkit
-from langchain.agents import create_react_agent
-import psycopg2
-from sqlalchemy import create_engine, event, text
+from langchain_community.agent_toolkits.sql.base import create_sql_agent
+from langchain.agents.agent_types import AgentType
+from sqlalchemy.exc import SQLAlchemyError
+import os
+import logging
+import asyncio
 from dotenv import load_dotenv
-from langsmith import Client
 
-# Load environment variables
+# Load environment variables from .env file
 load_dotenv()
 
-# Initialize LangSmith client if needed
-os.environ["LANGCHAIN_TRACING_V2"] = "true"
-os.environ["LANGCHAIN_PROJECT"] = "postgres-sql-agent"
-os.environ["LANGSMITH_API_KEY"] = os.getenv("LANGSMITH_API_KEY")
+# Set up logging
+logging.basicConfig(filename='app.log', level=logging.INFO, 
+                    format='%(asctime)s - %(levelname)s - %(message)s')
 
-# Initialize session state variables with default values
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-if "table_names" not in st.session_state:
-    st.session_state.table_names = "Loading tables..."
-if "table_info" not in st.session_state:
-    st.session_state.table_info = "Loading schema information..."
-if "context" not in st.session_state:
-    st.session_state.context = {}
-
-# Check if AWS Bedrock credentials are set
-if not (os.getenv("AWS_ACCESS_KEY_ID") and os.getenv("AWS_SECRET_ACCESS_KEY") and os.getenv("AWS_REGION_NAME")):
-    st.error("❌ AWS credentials (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION_NAME) must be set in .env file. Please set them and restart the application.")
-    st.stop()
-
-# Function to connect to PostgreSQL database
-def get_postgresql_engine():
-    """Create connection to PostgreSQL cricket_academy database."""
-    try:
-        connection_string = "postgresql://postgres:postgres@localhost:5432/cricket_academy"
-        engine = create_engine(connection_string)
-        
-        # Test connection
-        with engine.connect() as conn:
-            result = conn.execute(text("SELECT 1")).fetchone()
-            if result and result[0] == 1:
-                st.success("✅ Successfully connected to PostgreSQL database!")
-            else:
-                st.error("❌ Connection test failed")
-        
-        # Add event listener to prevent modification queries
-        @event.listens_for(engine, "before_cursor_execute")
-        def prevent_modification_queries(conn, cursor, statement, parameters, context, executemany):
-            # Convert statement to lowercase to catch all variations
-            statement_lower = statement.lower().strip()
-            
-            # Check if the statement is a modification query
-            if (statement_lower.startswith('update') or 
-                statement_lower.startswith('delete') or 
-                statement_lower.startswith('insert') or 
-                statement_lower.startswith('alter') or 
-                statement_lower.startswith('drop') or 
-                statement_lower.startswith('truncate')):
-                raise Exception("⚠️ This application is set to read-only mode. Modification queries are not allowed.")
-        
-        return engine
-    except Exception as e:
-        st.error(f"❌ Database connection error: {str(e)}")
-        raise
-
-# Function to fix table formatting in markdown text
-def fix_table_formatting(text):
-    """Ensures tables in markdown are properly formatted with newlines before and after."""
-    # Look for table patterns (lines starting with | and containing |)
-    lines = text.split('\n')
-    fixed_lines = []
-    in_table = False
+# Function to securely get database connection using environment variables
+@st.cache_resource
+def get_db_connection():
+    """
+    Establishes a connection to the PostgreSQL database using environment variables.
     
-    for i, line in enumerate(lines):
-        # Detect start of a table (line with | character)
-        if not in_table and line.strip().startswith('|') and '|' in line[1:]:
-            # If previous line isn't empty, add blank line
-            if i > 0 and lines[i-1].strip() != '':
-                fixed_lines.append('')
-            in_table = True
-            fixed_lines.append(line)
-        # Detect end of a table
-        elif in_table and (not line.strip().startswith('|') or not '|' in line[1:]):
-            # If next line isn't empty, add blank line
-            if line.strip() != '':
-                fixed_lines.append('')
-            in_table = False
-            fixed_lines.append(line)
+    Returns:
+        SQLDatabase: The database connection object, or None if connection fails.
+    """
+    try:
+        # Fetch environment variables with defaults
+        db_user = os.getenv('DB_USER', 'default_user')
+        db_password = os.getenv('DB_PASSWORD', 'default_password')
+        db_host = os.getenv('DB_HOST', 'localhost')
+        db_port = os.getenv('DB_PORT', '5432')  # Default PostgreSQL port
+        db_name = os.getenv('DB_NAME', 'default_db')
+
+        # Construct the database URI
+        db_uri = f"postgresql://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}"
+        
+        # Validate port
+        if not db_port.isdigit():
+            raise ValueError(f"Invalid port number: {db_port}")
+        
+        logging.info(f"Connecting to database with URI: {db_uri}")
+        return SQLDatabase.from_uri(db_uri)
+    except ValueError as ve:
+        logging.error(f"Database configuration error: {str(ve)}")
+        st.error(f"Database configuration error: {str(ve)}")
+        return None
+    except SQLAlchemyError as e:
+        logging.error(f"Database connection failed: {str(e)}")
+        st.error("Failed to connect to the database. Please check your configuration.")
+        return None
+
+# Function to initialize the Claude 3 Sonnet model via AWS Bedrock
+@st.cache_resource
+def get_llm():
+    """
+    Initializes the Claude 3 Sonnet model using AWS Bedrock with credentials from .env.
+    
+    Returns:
+        ChatBedrock: The language model object, or None if initialization fails.
+    """
+    try:
+        # Fetch AWS credentials from environment variables
+        aws_access_key = os.getenv('AWS_ACCESS_KEY_ID')
+        aws_secret_key = os.getenv('AWS_SECRET_ACCESS_KEY')
+        aws_region = os.getenv('AWS_REGION', 'us-east-1')
+
+        # Validate AWS credentials
+        if not aws_access_key or not aws_secret_key:
+            raise ValueError("AWS_ACCESS_KEY_ID or AWS_SECRET_ACCESS_KEY not set in .env")
+
+        llm = ChatBedrock(
+            model_id="us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+            model_kwargs={
+                "temperature": 0.1,
+                "max_tokens": 1000
+            },
+            region_name=aws_region,
+            credentials_profile_name=None,  # Explicitly avoid profile-based auth
+            aws_access_key_id=aws_access_key,
+            aws_secret_access_key=aws_secret_key
+        )
+        logging.info("LLM initialized successfully")
+        return llm
+    except ValueError as ve:
+        logging.error(f"AWS configuration error: {str(ve)}")
+        st.error(f"AWS configuration error: {str(ve)}")
+        return None
+    except Exception as e:
+        logging.error(f"Failed to initialize LLM: {str(e)}")
+        st.error("Failed to initialize the language model.")
+        return None
+
+# Function to create the SQL agent
+def create_agent():
+    """
+    Creates an SQL agent with the database connection and LLM.
+    
+    Returns:
+        AgentExecutor: The SQL agent, or None if creation fails.
+    """
+    db = get_db_connection()
+    llm = get_llm()
+    if db is None or llm is None:
+        return None
+    toolkit = SQLDatabaseToolkit(db=db, llm=llm)
+    agent = create_sql_agent(
+        llm=llm,
+        toolkit=toolkit,
+        verbose=True,
+        agent_type=AgentType.ZERO_SHOT_REACT_DESCRIPTION
+    )
+    logging.info("SQL agent created successfully")
+    return agent
+
+# Basic input validation to prevent harmful SQL commands
+def validate_input(query):
+    """
+    Validates the user input to prevent potentially harmful SQL commands.
+    
+    Returns:
+        bool: True if the input is safe, False otherwise.
+    """
+    dangerous_commands = ["DROP", "DELETE", "UPDATE", "INSERT"]
+    if any(cmd in query.upper() for cmd in dangerous_commands):
+        logging.warning(f"Blocked potentially harmful query: {query}")
+        return False
+    return True
+
+# Asynchronous function to run the agent query
+async def run_agent_query(agent, prompt):
+    """
+    Runs the agent query asynchronously.
+    
+    Returns:
+        str: The result of the query, or an error message.
+    """
+    try:
+        response = await asyncio.to_thread(agent.run, prompt)
+        logging.info(f"Query executed successfully: {prompt}")
+        return response
+    except Exception as e:
+        logging.error(f"Query execution failed: {str(e)}")
+        return f"Error: {str(e)}"
+
+# Main Streamlit application
+def main():
+    st.set_page_config(page_title="SQL Query Assistant", page_icon="💬")
+    st.title("Chat with Your PostgreSQL Database")
+    
+    # Initialize session state for chat history
+    if "messages" not in st.session_state:
+        st.session_state.messages = [
+            {"role": "assistant", "content": "Hello! I can help you query your PostgreSQL database. What would you like to know?"}
+        ]
+    
+    # Display chat history
+    for message in st.session_state.messages:
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
+    
+    # Create the SQL agent
+    agent = create_agent()
+    if agent is None:
+        st.error("Failed to initialize the SQL agent.")
+        return
+    
+    # Sample queries for user guidance
+    sample_queries = [
+        "How many users signed up last month?",
+        "What is the total revenue for this year?",
+        "List the top 5 products by sales.",
+        "Show me the average order value."
+    ]
+    
+    # Sidebar with instructions and sample queries
+    st.sidebar.title("Instructions")
+    st.sidebar.markdown("""
+    - Ask natural language questions about your database.
+    - Use the sample queries below to get started.
+    - Set environment variables in a `.env` file.
+    """)
+    st.sidebar.subheader("Sample Queries")
+    for query in sample_queries:
+        if st.sidebar.button(query):
+            st.session_state.messages.append({"role": "user", "content": query})
+            with st.chat_message("user"):
+                st.markdown(query)
+            with st.chat_message("assistant"):
+                with st.spinner("Querying database..."):
+                    if validate_input(query):
+                        response = asyncio.run(run_agent_query(agent, query))
+                        st.markdown(response)
+                        st.session_state.messages.append({"role": "assistant", "content": response})
+                    else:
+                        st.error("This query is not allowed.")
+    
+    # Chat input for user queries
+    if prompt := st.chat_input("Ask a question about your database..."):
+        if validate_input(prompt):
+            st.session_state.messages.append({"role": "user", "content": prompt})
+            with st.chat_message("user"):
+                st.markdown(prompt)
+            with st.chat_message("assistant"):
+                with st.spinner("Querying database..."):
+                    response = asyncio.run(run_agent_query(agent, prompt))
+                    st.markdown(response)
+                    st.session_state.messages.append({"role": "assistant", "content": response})
         else:
-            fixed_lines.append(line)
-    
-    return '\n'.join(fixed_lines)
+            st.error("This query is not allowed.")
 
-# Initialize database and agent if not already done
-if "agent_executor" not in st.session_state:
-    try:
-        # Initialize database and agent
-        engine = get_postgresql_engine()
-        db = SQLDatabase(engine)
-        
-        # Use Claude 3.5 Sonnet as the model
-        MODEL = "anthropic.claude-3-sonnet-20240229-v1:0"
-        llm = ChatBedrockConverse(
-            model=MODEL,
-            region_name=os.getenv("AWS_REGION_NAME"),
-            temperature=0.1,
-            max_tokens=8192,
-            verbose=True
-        )
-        toolkit = SQLDatabaseToolkit(db=db, llm=llm)
-        context = toolkit.get_context()
-        
-        # Store database information in session state
-        st.session_state.table_names = context.get('table_names', '')
-        st.session_state.table_info = context.get('table_info', '')
-        st.session_state.context = context
-        
-        tools = toolkit.get_tools()
-        
-        # Create the proper ReAct prompt template with required variables
-        prompt_template = """## Task And Context
-You use your advanced complex reasoning capabilities to help people by answering their questions and other requests about the cricket academy database. 
-You will be asked questions about the database that contains information related to a cricket academy, including tables for players, coaches, programs, 
-training sessions, payments, attendance, and more.
-
-## Style Guide
-Unless the user asks for a different style of answer, you should answer in full sentences, using proper grammar and spelling.
-When displaying tables in markdown format, always add a blank line before and after the table for proper rendering.
-
-## Additional Information
-You are an expert who answers the user's question by creating SQL queries and executing them.
-You are equipped with a number of relevant SQL tools.
-IMPORTANT: This application is in READ-ONLY mode. You should ONLY use SELECT queries.
-Do not create, modify, or delete any data in the database.
-
-Here is information about the database:
-{table_info}
-
-## Tools
-You have access to the following tools:
-
-{tools}
-
-Use the following format:
-
-Question: the input question you must answer
-Thought: you should always think about what to do
-Action: the action to take, should be one of [{tool_names}]
-Action Input: the input to the action
-Observation: the result of the action
-... (this Thought/Action/Action Input/Observation can repeat N times)
-Thought: I now know the final answer
-Final Answer: the final answer to the original input question
-
-Question: {input}
-{agent_scratchpad}
-"""
-        
-        # Create the prompt with the proper format
-        prompt = ChatPromptTemplate.from_template(prompt_template)
-        
-        # Create the React agent using Claude
-        agent = create_react_agent(
-            llm=llm,
-            tools=tools,
-            prompt=prompt,
-        )
-        
-        st.session_state.agent_executor = AgentExecutor(
-            agent=agent,
-            tools=tools,
-            verbose=True,
-            return_intermediate_steps=True
-        )
-    except Exception as e:
-        st.error(f"Error initializing the agent: {str(e)}")
-        st.session_state.table_names = "Error loading tables. Please check the database connection."
-        st.session_state.table_info = "Error loading schema. Please check the database connection."
-
-# Streamlit UI
-st.title("Cricket Academy SQL Agent (Claude 3.5 Sonnet) - Read-Only")
-st.caption("This application operates in read-only mode and only allows SELECT queries.")
-
-# Add a sidebar with database information
-with st.sidebar:
-    st.header("Database Information")
-    with st.expander("Available Tables"):
-        st.write(st.session_state.table_names)
-    with st.expander("Database Schema"):
-        st.code(st.session_state.table_info)
-    
-    st.divider()
-    st.warning("⚠️ This application operates in READ-ONLY mode. Only SELECT queries are permitted.")
-
-st.write("Ask questions about the Cricket Academy database!")
-
-# Display chat history
-for message in st.session_state.messages:
-    with st.chat_message(message["role"]):
-        st.markdown(message["content"])
-
-# Chat input
-if prompt := st.chat_input("Ask a question about the cricket academy database"):
-    # Add user message to chat history
-    st.session_state.messages.append({"role": "user", "content": prompt})
-    with st.chat_message("user"):
-        st.markdown(prompt)
-
-    # Get agent response
-    with st.chat_message("assistant"):
-        with st.spinner("Thinking..."):
-            try:
-                response = st.session_state.agent_executor.invoke({
-                    "input": prompt,
-                    "table_info": st.session_state.context
-                })
-                response_content = response["output"]
-                
-                # Fix table formatting in the response
-                fixed_response = fix_table_formatting(response_content)
-                
-                st.markdown(fixed_response)
-                
-                # Show intermediate steps in an expander
-                with st.expander("See agent's thought process"):
-                    for step in response["intermediate_steps"]:
-                        st.write(f"Tool: {step[0].tool}")
-                        st.write(f"Input: {step[0].tool_input}")
-                        st.write(f"Output: {step[1]}")
-                        st.write("---")
-                
-                # Add assistant response to chat history
-                st.session_state.messages.append({"role": "assistant", "content": fixed_response})
-            except Exception as e:
-                error_message = f"Error: {str(e)}"
-                st.error(error_message)
-                st.session_state.messages.append({"role": "assistant", "content": error_message}) 
+# Entry point
+if __name__ == "__main__":
+    main()
